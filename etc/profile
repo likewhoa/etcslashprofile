@@ -1,0 +1,437 @@
+# /etc/profile: login shell setup
+#
+# That this file is used by any Bourne-shell derivative to setup the
+# environment for login shells.
+#
+
+# Load environment settings from profile.env, which is created by
+# env-update from the files in /etc/env.d
+if [ -e /etc/profile.env ] ; then
+	. /etc/profile.env
+fi
+
+# You should override these in your ~/.bashrc (or equivalent) for per-user
+# settings.  For system defaults, you can add a new file in /etc/profile.d/.
+export EDITOR=${EDITOR:-/bin/nano}
+export PAGER=${PAGER:-/usr/bin/less}
+
+# 077 would be more secure, but 022 is generally quite realistic
+umask 022
+
+# Set up PATH depending on whether we're root or a normal user.
+# There's no real reason to exclude sbin paths from the normal user,
+# but it can make tab-completion easier when they aren't in the
+# user's PATH to pollute the executable namespace.
+#
+# It is intentional in the following line to use || instead of -o.
+# This way the evaluation can be short-circuited and calling whoami is
+# avoided.
+if [ "$EUID" = "0" ] || [ "$USER" = "root" ] ; then
+	PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${ROOTPATH}"
+else
+	PATH="/usr/local/bin:/usr/bin:/bin:${PATH}"
+fi
+export PATH
+unset ROOTPATH
+
+if [ -n "${BASH_VERSION}" ] ; then
+	# Newer bash ebuilds include /etc/bash/bashrc which will setup PS1
+	# including color.  We leave out color here because not all
+	# terminals support it.
+	if [ -f /etc/bash/bashrc ] ; then
+		# Bash login shells run only /etc/profile
+		# Bash non-login shells run only /etc/bash/bashrc
+		# Since we want to run /etc/bash/bashrc regardless, we source it
+		# from here.  It is unfortunate that there is no way to do
+		# this *after* the user's .bash_profile runs (without putting
+		# it in the user's dot-files), but it shouldn't make any
+		# difference.
+		. /etc/bash/bashrc
+	else
+		PS1='\u@\h \w \$ '
+	fi
+else
+	# Setup a bland default prompt.  Since this prompt should be useable
+	# on color and non-color terminals, as well as shells that don't
+	# understand sequences such as \h, don't put anything special in it.
+	PS1="${USER:-$(whoami 2>/dev/null)}@$(uname -n 2>/dev/null) \$ "
+fi
+
+for sh in /etc/profile.d/*.sh ; do
+	[ -r "$sh" ] && . "$sh"
+done
+unset sh
+ranpasswd() {
+        local length="$1"
+        local excludes="$2"
+        local x=$(($length+10))
+        local y=$(($x-10))
+
+        head -c $length /dev/random | uuencode -m - | sed -n 2p | tr '[=$excludes]' ' ' | head -c $y
+        echo -e "\nyour generated password phrase is above."
+}
+
+alias egit-reset='git reset --hard; git branch -M master master-old; git checkout -b master origin/master; git branch -D master-old; git checkout -f)'
+
+eunrar() { for i in [Cc][Dd][1-20]; do cd ${i} && find -type f -name '*.part0*1.rar' -exec unrar x {} \; && grep -E '*.r+' *.sfv | cut -d' ' -f1 | xargs rm && cd $OLDPWD;done }
+
+e-openssl() {
+        openssl genrsa -des3 -out ${1}.key ${2}
+        openssl req -new -key ${1}.key -out ${1}.csr
+
+        echo "backing up private key"
+        cp ${1}.key ${1}.key.bck
+
+        openssl rsa -in ${1}.key.bck -out ${1}.key
+        openssl x509 -req -days 365 -in ${1}.csr -signkey ${1}.key -out ${1}.crt
+
+        echo "All done!"
+}
+
+emerge=$(which emerge)
+
+e-noise() {
+	case $1 in
+		--wn)
+			echo "The White Noise"
+			play -c2 -n synth whitenoise band -n 100 24 band -n 300 100 gain +20
+			;;
+		--gcc)
+			echo "The Gcc Noise"
+			echo "main(i){for(i=0;;i++)putchar(((i*(i>>17|i>>9)&46&i>>3))^(i&i>>10|i>>100));}" | gcc -x c - && ./a.out | aplay
+			;;
+		--tcpdump)
+			echo "tcpdump Noise"
+			tcpdump -i eth0 -n -l -w - | aplay -c 2
+			;;
+		*)
+			echo "You need one of --wn,--gcc or --tcpdump biatch"
+	esac
+}
+chksectorcount() {
+  local -a drives=(/dev/sd*)
+
+  # Iterate through array to remove partitions i.e /dev/sda1 and so on
+  ((n_elements=${#drives[@]}, max_index=n_elements - 1))
+
+  for ((i = 0; i <= max_index; i++)); do
+    if [[ $(echo ${drives[i]} | grep -v '[0-9]') ]]; then
+      smartctl -a ${drives[i]} | grep "Sector Size:"|sed "s:^:${drives[i]} :"
+    else
+      unset 'drives[i]'
+      continue
+    fi
+  done
+}
+
+sprunge() {
+        if [ $# -eq 0 ] || { [ $# -eq 1 ] && [ x- = "x$1" ]; }; then
+                curl -F 'sprunge=<-' http://sprunge.us
+        else
+                local f
+                for f; do
+                        [ -f "$f" ] || continue
+                        echo "Paste of: $f"
+                        curl -F 'sprunge=<-' http://sprunge.us < "$f"
+                done
+        fi
+}
+
+extract_cpio() {
+  mkdir /tmp/cpio
+  cd /tmp/cpio
+  cat ${1} | unxz -d | cpio -idm --quiet -H newc
+}
+
+gcc-check-cflags() {
+case ${1} in
+	--verbose)
+		echo 'int main(){return 0;}' > test.c && gcc -v -Q -march=native -O2 test.c -o test && rm test.c test
+		;;
+	*)
+		gcc -O2 -march=native -Q --help=target
+esac
+}
+
+drush() {
+  local dbin=$(which drush)
+
+  case $1 in
+    fwd-staging)
+      ${dbin} -y rsync -acv --delete-before --progress @dev:htdocs/ @staging:htdocs
+      ${dbin} -y sql-sync @dev @staging --no-cache
+    ;;
+    forward|fwd)
+      ${dbin} -y rsync -acv --delete-before --progress @dev:htdocs/ @prod:htdocs
+      ${dbin} -y sql-sync @dev @prod --no-cache
+    ;;
+    rev-staging)
+      ${dbin} -y rsync -acv --delete-before --progress @staging:htdocs/ @dev:htdocs
+      ${dbin} -y sql-sync @staging @dev --no-cache
+    ;;
+    reverse|rev)
+      ${dbin} -y rsync -acv --delete-before --progress @prod:htdocs/ @dev:htdocs
+      ${dbin} -y sql-sync @prod @dev --no-cache
+      ;;
+    *) ${dbin} "${@}"
+      ;;
+esac
+}
+
+e-ata() {
+  for device in /sys/block/sd*; do
+    name=$(basename ${device})
+    host=$(readlink ${device} | egrep -o "host[0-9]+")
+    target=$(readlink ${device} | egrep -o "target[0-9:]*")
+    x=$(echo ${target} | egrep -o "[0-9]:[0-9]$" | sed 's/://')
+    y=$(</sys/class/scsi_host/${host}/unique_id)
+    echo "${name} -> ata${y}.${x}"
+  done
+}
+
+e-qemu-mount() {
+  case $1 in
+    mount)
+    	if ! [[ $(lsmod | grep nbd) ]]; then
+		modprobe nbd max_part=63
+		qemu-nbd -c /dev/nbd0 /GentooVM.img
+		mount /dev/nbd0p1 /mnt/qemu-img
+	fi
+	;;
+    umount)
+    	if [[ $(mount|grep "/mnt/qemu-img") ]]; then
+		umount /mnt/qemu-img
+		killall qemu-nbd
+		modprobe -r nbd
+	else
+		echo "Nothing to umount!"
+	fi
+	;;
+	*) echo "try parameters mount or umount"
+  esac
+}
+
+lamp() {
+  case $1 in
+    start|-s)
+      for i in memcached mysql php-fpm; do rc-service $i start;done
+      ;;
+    stop|-h)
+      for i in memcached mysql php-fpm nginx; do rc-service $i stop;done
+      ;;
+    *) echo "Failed!! try lamp {start,stop} punk"
+    ;;
+  esac
+}
+
+youtube() {
+  mplayer -fs $(youtube-dl -g "$1")
+}
+
+emerge() {
+
+case $1 in
+        -ew)
+                $emerge $(emerge -ep --columns @world| awk '{print$4}' | grep -e '[a-z]*-[a-z]*/[a-z]' | uniq | egrep -v "(glibc|portage|binutils|gcc|linux(26)?\-headers)") --keep-going -1
+        ;;
+        -es)
+                $emerge $(emerge -ep --columns @system| awk '{print$4}' | grep -e '[a-z]*-[a-z]*/[a-z]' | uniq | egrep -v "(glibc|portage|binutils|gcc|linux(26)?\-headers)") --keep-going -1
+        ;;
+        sync)
+                echo "running emerge --sync"
+                $emerge --sync
+        ;;
+        -s) shift
+                echo "no eix search is faster"
+                eix "$@"
+        ;;
+        digest)
+                a=$(find . -maxdepth 2 -type f -name '*.ebuild'|sort|head -n1)
+                ebuild $a digest
+        ;;
+        compile)
+                a=$(find . -maxdepth 1 -type f -name '*.ebuild'|sort|head -n1)
+                ebuild $a compile
+        ;;
+        install)
+                a=`find . -maxdepth 1 -type f -name '*.ebuild'`
+                ebuild $a clean install
+        ;;
+        unmask)
+                if [ "$#" -lt 2 ]; then
+                        echo "not enough parameters. try.."
+                        echo "emerge unmask <category> <keyword>. i.e emerge unmask games-puzzle ~x86"
+                        exit 1
+                fi
+                ls -I metadata.xml --color=no /usr/portage/$1 | sed 's@^@\'$1'/@' | while read line;do echo $line $3 >>/etc/portage/package.keywords;done
+        ;;
+        ricer|breakme|0mg|breakage|letitburn)
+                find /usr/portage/ -maxdepth 2 -mindepth 2 -type d -wholename '*-*'|egrep -v 'packages/|distfiles/|eclass/|licenses/|metadata/|profiles/|\
+virtual/'|cut -d/ -f 4-5|while read line; do echo "$line -*" >>/etc/portage/package.keywords ;done
+
+        ;;
+        *) $emerge "$@"
+esac
+
+}
+
+eshowkw() {
+        local pkgcat=`eix -e -c $1 | head -n1 | awk '{print$2}'`
+        cd $(portageq portdir )/$pkgcat
+
+        local x y e v p a k l
+
+        l=$(portageq portdir )/profiles
+        for x in $(seq 1 5) ; do
+                printf "%-18s| " ""
+                for a in $(cat ${l}/arch.list ) ; do
+                        printf "%1s%1s " "${a:$((${x} - 1)):1}" "${a:$((5 + (${x} - 1))):1}"
+                done
+                echo ""
+        done
+
+        printf "%-18s+" "------------------"
+        for a in $(cat ${l}/arch.list ) ; do
+                printf "%3s" "---"
+        done
+        echo ""
+
+        p=`pwd` ; p=${p##*/}
+        for e in *.ebuild ; do
+                v=${e%%.ebuild} ; v=${v##${p}-}
+                printf "%-18s| " ${v}
+                for a in $(cat ${l}/arch.list ) ; do
+                        k=$(cat "${e}" | sed -ne "s/^KEYWORDS=.*\([-~ \"]${a}[^a-zA-Z0-9]\).*/\1/1p")
+                        case "$k" in
+                                ~*)
+                                        echo -ne "\033[01;33m~  "
+                                        ;;
+                                -*)
+                                        echo -ne "\033[01;31m-  "
+                                        ;;
+                                ?*)
+                                        echo -ne "\033[01;34m+  "
+                                ;;
+                                *)
+                                        grep 'KEYWORDS=.*-\*' ${e} > /dev/null \
+                                                && echo -ne "\033[01;31m*  " \
+                                                || echo -ne "   "
+                                ;;
+                        esac
+                done
+                echo -e "\033[00m"
+        done
+}
+
+show() {
+case $1 in
+        world)
+                find /var/db/pkg -mindepth 2 -maxdepth 2 -type d|cut -d/ -f5-6|less
+        ;;
+        system)
+                $emerge -ep --columns system| awk '{print$4}' | grep -e '[a-z]*-[a-z]*/[a-z]'|less
+        ;;
+        *)
+                a=`echo $1|tr [:lower:] [:upper:]`
+                echo "Local System Settings"; sed -n 's:^'${a}'=::p' /etc/make.conf
+                echo "Global System Settings"; sed -n 's:^'${a}'=::p' /etc/make.globals
+        ;;
+esac
+
+}
+edo() {
+case $1 in
+        rmp3s)
+for i in *.mp3; do
+        title=$(id3v2 -R "${i}"|sed -n 2p|cut -d ' ' -f4-10|sed "s:['.]::"|xargs echo|tr ' ' '_')
+        artist=$(id3v2 -R "${i}"|sed -n 2p|cut -d: -f3|sed 's:^ ::'|sed "s:['.]::"|xargs echo|tr ' ' '_')
+
+        val_artist=$(id3v2 -R "${i}"|sed -n 2p|grep Artist)
+        val_title=$(id3v2 -R "${i}"|sed -n 2p|grep Title)
+
+        if [ ! -z "$val_artist" ] && [ ! -z "$val_title" ]; then
+        echo "${title}-${artist}.mp3"
+        fi
+done
+        ;;
+esac
+
+}
+
+install() {
+case $1 in
+        printer)
+                foomatic-configure -s cups -p Epson-Stylus_C84 -c file:/dev/usb/lp0 -n Epson_C84 -d gimp-print
+        ;;
+        gensplash) shift
+                if [ -e "/usr/src/linux/usr/initramfs_data.cpio.gz" ]; then
+                        rm -v /usr/src/linux/usr/initramfs_data.cpio.gz
+                fi
+                cd /etc/splash
+                splash_geninitramfs -v --no8bpp -g /usr/src/linux/usr/initramfs_data.cpio.gz -r $1 $2
+                cd /usr/src/linux
+                touch usr/initramfs_data.cpio.gz
+                ./install.sh
+                cd /etc/splash
+                splash_geninitramfs -v --no8bpp -g /boot/fbsplash-$1-$2 -r $1 $2
+        ;;
+        -h|--help|-?)
+                echo "Available install options"
+                echo "printer: install your fucking printer,.. Epson_C84"
+                echo "gensplash:"
+                echo "usage-> install gensplash <resolution> <theme>"
+                echo "i.e-> install gensplash 1600x1200 likewhoa-1.3"
+                echo "end"
+esac
+
+}
+
+clean() {
+        rm -rfv /usr/portage/distfiles/* /var/tmp/* /var/log/portage/*
+        rm /tmp/*.torrent
+        find /home/wumaster/irclogs -type f -iname '*ricer*' -exec shred -v -u -z '{}' \;
+        for i in /home/wumaster/.bash_history /root/.bash_history; do
+                shred -v -u -z $i
+        done
+}
+
+zfs-snapshot() {
+  zfs snapshot -r darkside@backup-$(date +%Y%m%d)
+}
+
+mtgox() { while true; do curl 'https://mtgox.com/' 2>&1 |egrep 'lastPrice|highPrice|lowPrice' |sed 's#<[^>]*>##g' |xargs ; sleep 10s ; done; }
+
+PS1="\[\033[0;32m\]\h:\[\033[1;30m\]\w->\[\033[0m\] "
+
+#cd /root && source matrix && matrix
+alias 1="cd ../"
+alias 2="cd ../.."
+alias 3="cd ../../.."
+alias 4="cd ../../../.."
+alias 5="cd ../../../../.."
+alias 6="cd ../../../../../.."
+alias 7="cd ../../../../../../.."
+alias l='ls --color'
+alias df='df -h'
+alias cp='cp -v'
+alias mv='mv -v'
+alias du='du -hcs'
+alias ls='ls --color'
+alias free='free -l'
+alias nano='vim'
+alias maserver='for ((i=1; i<=8; i++));do ping -c3 server${i}.maserver.com;done'
+alias unmute='amixer set Master 100 unmute; amixer set PCM 100 unmute'
+alias mute='amixer set Master 100 mute; amixer set PCM 100 mute'
+alias rar='rar a -m5 -md4096 -rr -t'
+alias console-clock='while sleep 1;do tput sc;tput cup 0 $(($(tput cols)-29));date;tput rc;done &'
+alias mysql-fix-tables='mysqlcheck --auto-repair -A -uroot -p'
+ban-ip() { iptables -A INPUT -s $1 -j DROP; }
+#alias setivtv='ivtvctl -u 0x3000;ivtvctl -p 4;ivtvctl -f width=720,height=480;ivtvctl -v input=3,output=1'
+
+fsearch() {
+        find / -regex '^/\(dev\|sys\|lost\+found\|mnt\|proc\)' -prune -o -type f -size +"${1}"M -printf "%-12s%p\n"
+}
+
+#rm=$(which rm)
+#rm (){ case $1 in -rf) if [ $2 = "/" ]; then echo "you idiot!"; else $rm "${@}"; fi esac }
+
