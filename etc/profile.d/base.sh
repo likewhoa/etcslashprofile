@@ -9,11 +9,12 @@ local rm=$(which rm)
 case $1 in
   -rf)
     if [ / = "$2" ]; then
-      echo "Back up buddy!"
+      echo "Back up buddy! WTH R U doing trying to remove me /??!"
     else
       echo "$rm \"$@\""
     fi
 esac
+
 }
 
 #
@@ -51,7 +52,7 @@ zfs-snapshot() {
         if [ $# -lt 1 ]; then
                 echo "You need a pool to snapshot!"
         else
-                zfs snapshot -r "$1"@backup-$(date +%Y%m%d)
+                zfs snapshot -r "$1"@lappy-$(date +%Y%m%d)
         fi
 }
 
@@ -238,7 +239,7 @@ e-qemu-mount() {
                         if ! [[ $(lsmod | grep nbd) ]]; then
                                 modprobe nbd max_part=63
                                 if [ -r "$2" ]; then
-                                        qemu-nbd -c /dev/nbd0 /GentooVM.img
+                                        qemu-nbd -c /dev/nbd0 $2
                                         mount /dev/nbd0p1 /mnt/qemu-img
                                 else
                                         echo "$2 not readable"
@@ -266,15 +267,27 @@ e-qemu-mount() {
 e-lamp() {
         case $1 in
                 start|-s)
-                        for daemon in memcached mysql php-fpm; do
-                                rc-service "$daemon" start
-                        done
+			if [ $2 = "systemd" ]; then
+				for daemon in mysqld.service nginx.service php-fpm@5.6.service; do
+					systemctl start "$daemon"
+				done
+                        else
+				for daemon in memcached mysql php-fpm; do
+                                	rc-service "$daemon" start
+                        	done
+			fi
                         ;;
                 stop|-h)
-                        for daemon in memcached mysql php-fpm nginx; do
-                                rc-service "$daemon" stop
-                        done
-                        ;;
+			if [ $2 = "systemd" ]; then
+				for daemon in mysqld.service nginx.service php-fpm@5.6.service; do
+					systemctl stop "$daemon"
+				done
+			else
+			        for daemon in memcached mysql php-fpm nginx; do
+                        	        rc-service "$daemon" stop
+                        	done
+			fi
+			;;
                 *) echo "Failed!! try lamp {start,stop} punk"
         esac
 }
@@ -388,5 +401,21 @@ case $1 in
 esac
 }
 
+e-sysctl() {
+        case $1 in
+                --lock)
+                        sed -i 's/new_usb = 0/new_usb = 1/' /etc/sysctl.d/local.conf
+                        sysctl --system
+                        ;;
+                --unlock)
+                        sed -i 's/new_usb = 1/new_usb = 0/' /etc/sysctl.d/local.conf
+                        sysctl --system
+                        ;;
+                *)
+                        echo "Invalid option"
+                        exit
+        esac
+}
 
+alias e-logind-check='loginctl show-session $XDG_SESSION_ID'
 
